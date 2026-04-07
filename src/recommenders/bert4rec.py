@@ -37,26 +37,30 @@ class BERT4RecModel(nn.Module):
             dropout=dropout,
             batch_first=True,
             activation="gelu",
+            norm_first=False,
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        self.layernorm = nn.LayerNorm(hidden_size)
-        # Checkpoint uses a hidden projection, then ties logits to item embeddings.
         self.out_proj = nn.Linear(hidden_size, hidden_size)
+        self.out_gelu = nn.GELU()
         self.register_parameter("out_bias", nn.Parameter(torch.zeros(vocab_size)))
 
+    def _build_position_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
+        non_pad = (input_ids != self.pad_token_id).long()
+        pos_ids = torch.cumsum(non_pad, dim=1) - 1
+        return pos_ids.clamp(min=0)
+
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
-        batch_size, seq_len = input_ids.size()
+        _, seq_len = input_ids.size()
         if seq_len > self.max_len:
             raise BERT4RecInferenceError("Input sequence is longer than model max_len.")
 
-        positions = torch.arange(seq_len, device=input_ids.device).unsqueeze(0).expand(batch_size, seq_len)
-        hidden = self.item_embedding(input_ids) + self.position_embedding(positions)
+        pos_ids = self._build_position_ids(input_ids)
+        hidden = self.item_embedding(input_ids) + self.position_embedding(pos_ids)
 
         key_padding_mask = input_ids.eq(self.pad_token_id)
         hidden = self.encoder(hidden, src_key_padding_mask=key_padding_mask)
-        hidden = self.layernorm(hidden)
 
-        hidden = self.out_proj(hidden)
+        hidden = self.out_gelu(self.out_proj(hidden))
         logits = torch.matmul(hidden, self.item_embedding.weight.transpose(0, 1)) + self.out_bias
         return logits
 
@@ -75,7 +79,9 @@ class BERT4RecRecommender:
         self.device = torch.device(device)
         self.artifacts = self._load_mapping(mapping_path)
 
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        # PyTorch 2.6 changed torch.load default weights_only=True.
+        # Our local checkpoint stores extra metadata, so we need full unpickling.
+        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
         config = checkpoint.get("config", {})
 
         vocab_size = int(checkpoint.get("vocab_size", 0))
