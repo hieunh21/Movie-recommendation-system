@@ -17,11 +17,13 @@ class HybridRecommender:
 
     @staticmethod
     def _alpha_from_sequence_length(seq_len: int) -> float:
-        if seq_len >= 5:
-            return 0.7
-        if seq_len < 3:
+        if seq_len == 0:
+            return 0.0
+        if seq_len <= 2:
             return 0.3
-        return 0.5
+        if seq_len <= 4:
+            return 0.5
+        return 0.7
 
     @staticmethod
     def _normalize(score_map: Dict[int, float]) -> Dict[int, float]:

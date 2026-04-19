@@ -577,7 +577,14 @@ def _render_existing_user_phase2(config: AppConfig) -> None:
     
     if last_recommendations:
         click_count = len(st.session_state.existing_user.get("session_click_movie_ids", []))
-        alpha = 0.7 if click_count >= 5 else (0.3 if click_count < 3 else 0.5)
+        if click_count == 0:
+            alpha = 0.0
+        elif click_count <= 2:
+            alpha = 0.3
+        elif click_count <= 4:
+            alpha = 0.5
+        else:
+            alpha = 0.7
         st.caption(f"Hybrid alpha: {alpha:.1f} (session clicks: {click_count})")
 
         # Check if user is cold-start (not in training)
