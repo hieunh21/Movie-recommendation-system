@@ -18,9 +18,8 @@ env/
 .vscode/
 .idea/
 
-# Streamlit
-.streamlit/secrets.toml
-.streamlit/*.log
+# Backend
+backend/.env
 
 # OS
 .DS_Store

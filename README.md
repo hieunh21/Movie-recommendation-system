@@ -1,97 +1,157 @@
-# Movie Recommendation App
+# 🎬 MovieRec — Personalized Movie Recommendation System
 
-Streamlit-based movie recommendation system using MovieLens + TMDB metadata.
+Hệ thống gợi ý phim cá nhân hóa sử dụng các mô hình Deep Learning hiện đại, được xây dựng với **FastAPI** (backend) và **React + Vite** (frontend).
 
-Dataset source: MovieLens 1M from Kaggle: https://www.kaggle.com/datasets/cameliabenlaamari/movielens-1m-dataset
+---
 
-The app currently supports:
-- BERT4Rec (sequence-based recommendations)
-- NeuMF (collaborative filtering)
-- Hybrid scoring for existing users
-- Content-based similar-movie exploration (TF-IDF + cosine similarity)
+## Kiến trúc hệ thống
 
-## Core Recommendation Logic
-
-### New User
-- User explores movies from search/trending.
-- Clicking View adds the movie to current session history.
-- For You is generated from BERT4Rec using the click sequence.
-
-### Existing User
-- User enters/selects user_id.
-- NeuMF produces collaborative scores.
-- BERT4Rec produces sequence scores from session clicks.
-- Final score is fused:
-
-  final = alpha * bert_score + (1 - alpha) * neumf_score
-
-- Alpha is dynamic by sequence length:
-  - sequence >= 5: alpha = 0.7
-  - sequence < 3: alpha = 0.3
-  - otherwise: alpha = 0.5
-- Both score sources are min-max normalized to [0, 1] before fusion.
-- Already-viewed movies are filtered out.
-
-### Movie Info + Similar Content
-- View opens a dedicated movie-info page.
-- Similar movies are retrieved from prebuilt content artifacts (offline TF-IDF pipeline).
-- Runtime only reads artifacts; no fitting/retraining at request time.
-
-## Offline Build (Content Similarity)
-
-Build artifacts once (or when data changes):
-
-```powershell
-python scripts/build_content_similarity.py --base-path model --top-k 20
+```
+┌─────────────────────────────────────────────────────┐
+│                  React + Vite (Port 5173)            │
+│  ┌──────────┐  ┌──────────────┐  ┌────────────────┐ │
+│  │ Sidebar  │  │  HomePage    │  │ MovieInfoPage  │ │
+│  │ New User │  │ New / Exist  │  │  Detail + Sim  │ │
+│  │ Existing │  │ User flows   │  │  ilar movies   │ │
+│  └──────────┘  └──────────────┘  └────────────────┘ │
+└───────────────────────┬─────────────────────────────┘
+                        │ REST API (fetch)
+┌───────────────────────▼─────────────────────────────┐
+│               FastAPI Backend (Port 8000)            │
+│  /movies/search  /movies/trending  /movies/{id}      │
+│  /movies/{id}/similar                                │
+│  /recommend/new-user   /recommend/existing-user      │
+│  /users/sample                                       │
+└───────────────────────┬─────────────────────────────┘
+                        │
+┌───────────────────────▼─────────────────────────────┐
+│                    ML Models (src/)                  │
+│  BERT4Rec (new user)  │  NeuMF + Hybrid (exist user) │
+│  Content Similarity   │  TMDB API (metadata/poster)  │
+└─────────────────────────────────────────────────────┘
 ```
 
-Generated artifacts:
-- model/movies_clean.csv
-- model/topk_similar.pkl
-- model/tfidf_vectorizer.pkl
-- model/tfidf_matrix.npz
+---
 
-## Setup
+## Các mô hình ML
 
-1. Create and activate virtual environment.
-2. Install dependencies:
+| Mô hình | Vai trò | Khi nào dùng |
+|---|---|---|
+| **BERT4Rec** | Sequence-based collaborative filtering | New user (cold-start) |
+| **NeuMF** | Neural Matrix Factorization | Existing user |
+| **Hybrid** | α × BERT4Rec + (1-α) × NeuMF | Existing user có click history |
+| **Content Similarity** | Cosine similarity trên feature vector | Phim tương tự (Similar Movies) |
 
-```powershell
-pip install -r requirements.txt
+---
+
+## Cấu trúc dự án
+
+```
+Movie_recomendation/
+├── backend/
+│   ├── main.py          # FastAPI server — 8 endpoints
+│   └── .env             # Config (TMDB key, TOP_K, ...)
+├── frontend/
+│   └── src/
+│       ├── api/client.js          # Fetch wrapper
+│       ├── context/AppContext.jsx # Global state
+│       ├── components/
+│       │   ├── MovieCard.jsx      # Card phim
+│       │   ├── Carousel.jsx       # Carousel cuộn ngang
+│       │   └── Sidebar.jsx        # Điều hướng mode
+│       └── pages/
+│           ├── HomePage.jsx       # New User / Existing User
+│           └── MovieInfoPage.jsx  # Chi tiết + Similar Movies
+├── src/
+│   ├── recommenders/    # BERT4Rec, NeuMF, Hybrid
+│   └── services/        # TMDB, MovieCatalog, ContentSimilarity, IdMapper
+├── model/               # File model đã train (.pt, .keras, .pkl, .csv, ...)
+├── train/               # Script training
+└── scripts/             # Script tiện ích (build topk_similar, ...)
 ```
 
-3. Configure Streamlit secrets in .streamlit/secrets.toml:
+---
 
-```toml
-TMDB_API_KEY = "YOUR_KEY"
-TOP_K = 10
-MIN_CLICKS_FOR_COLD_START = 3
-TMDB_TIMEOUT_SECONDS = 10
+## Cài đặt & Chạy
+
+### Yêu cầu
+
+- Python 3.10+ với virtual environment (`.venv`)
+- Node.js 18+
+
+### 1. Cài dependencies
+
+```bash
+# Backend (trong .venv)
+.venv\Scripts\pip install fastapi uvicorn python-dotenv
+
+# Frontend
+cd frontend
+npm install
 ```
 
-4. Run app:
+### 2. Cấu hình backend
 
-```powershell
-streamlit run app.py
+Tạo / kiểm tra file `backend/.env`:
+
+```env
+TMDB_API_KEY=your_tmdb_api_key_here
+TOP_K=10
+MIN_CLICKS_FOR_COLD_START=3
+TMDB_TIMEOUT_SECONDS=10
 ```
 
-## Project Structure
+> Lấy TMDB API key miễn phí tại: https://www.themoviedb.org/settings/api
 
-- app.py: Streamlit entry point
-- src/config.py: configuration loader (secrets)
-- src/state.py: session-state initialization
-- src/ui/layout.py: all UI flows and routing
-- src/services/tmdb.py: TMDB client and movie metadata model
-- src/services/id_mapper.py: MovieLens <-> TMDB id mapping
-- src/services/movies_catalog.py: local movie catalog and search/trending
-- src/services/content_similarity.py: content-similar artifact reader
-- src/recommenders/bert4rec.py: BERT4Rec scoring and top-k inference
-- src/recommenders/neumf.py: NeuMF scoring and top-k inference
-- src/recommenders/hybrid.py: fusion recommender
-- scripts/build_content_similarity.py: offline TF-IDF artifact builder
-- model/: model files and mappings
+### 3. Chạy ứng dụng
 
-## Notes
+Mở **2 terminal** song song:
 
-- The app can run without TMDB key, but posters and TMDB metadata may be limited.
-- NeuMF/BERT4Rec run in inference mode only; no training occurs in app runtime.
+**Terminal 1 — Backend:**
+```bash
+cd e:\Movie_recomendation
+.venv\Scripts\python.exe -m uvicorn backend.main:app --reload --port 8000
+```
+
+**Terminal 2 — Frontend:**
+```bash
+cd e:\Movie_recomendation\frontend
+npm run dev
+```
+
+### 4. Truy cập
+
+| URL | Mô tả |
+|---|---|
+| http://127.0.0.1:5173 | Giao diện React |
+| http://127.0.0.1:8000/docs | Swagger API docs |
+
+---
+
+## Luồng hoạt động
+
+### 🆕 New User (cold-start)
+1. Browse / search phim trong catalog
+2. Click **View** trên ít nhất **3 phim** để tạo sequence
+3. BERT4Rec dự đoán top-10 phim phù hợp với taste của bạn
+
+### 👤 Existing User
+1. Chọn User ID (có trong MovieLens 1M dataset)
+2. Hệ thống hybrid tổng hợp: `α × BERT4Rec + (1-α) × NeuMF`
+3. Giá trị α tăng dần theo số phim click trong session:
+   - 0 click → α = 0.0 (chỉ NeuMF)
+   - 1-2 click → α = 0.3
+   - 3-4 click → α = 0.5
+   - 5+ click → α = 0.7
+
+### 🎬 Movie Detail
+- Xem metadata đầy đủ (poster, thể loại, điểm, nội dung)
+- Top-10 phim tương tự dựa trên Content Similarity
+
+---
+
+## Lưu ý
+
+- Lần khởi động đầu tiên backend cần **~10-15 giây** để load các model ML vào RAM
+- Trending movies sẽ tự động retry sau 8 giây nếu BERT4Rec chưa load xong
+- Poster phim cần TMDB API key hợp lệ trong `backend/.env`
