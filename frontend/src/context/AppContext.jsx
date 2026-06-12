@@ -9,12 +9,15 @@ export function AppProvider({ children }) {
     viewedIds: [],
     searchResults: [],
     recommendations: [],
+    model: "bert4rec",
   });
 
   const [existingUser, setExistingUser] = useState({
     userId: "",
     clickSequence: [],
     recommendations: [],
+    sessionModel: "bert4rec",
+    historyModel: "neumf",
   });
 
   const [movieInfo, setMovieInfo] = useState({

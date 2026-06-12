@@ -22,8 +22,14 @@ export const api = {
   trendingMovies: (limit = 12) => get(`/movies/trending?limit=${limit}`),
   getMovie: (id) => get(`/movies/${id}`),
   similarMovies: (id, topK = 10) => get(`/movies/${id}/similar?top_k=${topK}`),
-  recommendNewUser: (movieIds) => post("/recommend/new-user", { movie_ids: movieIds }),
-  recommendExistingUser: (userId, clickSequence) =>
-    post("/recommend/existing-user", { user_id: userId, click_sequence: clickSequence }),
+  recommendOptions: () => get("/recommend/options"),
+  recommendNewUser: (movieIds, model = "bert4rec") => post("/recommend/new-user", { movie_ids: movieIds, model }),
+  recommendExistingUser: (userId, clickSequence, sessionModel = "bert4rec", historyModel = "neumf") =>
+    post("/recommend/existing-user", {
+      user_id: userId,
+      click_sequence: clickSequence,
+      session_model: sessionModel,
+      history_model: historyModel,
+    }),
   sampleUsers: (limit = 200) => get(`/users/sample?limit=${limit}`),
 };

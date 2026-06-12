@@ -11,9 +11,9 @@ class HybridInferenceError(RuntimeError):
 
 
 class HybridRecommender:
-    def __init__(self, bert: BERT4RecRecommender, neumf: NeuMFRecommender) -> None:
-        self.bert = bert
-        self.neumf = neumf
+    def __init__(self, session_recommender: BERT4RecRecommender, history_recommender: NeuMFRecommender) -> None:
+        self.session_recommender = session_recommender
+        self.history_recommender = history_recommender
 
     @staticmethod
     def _alpha_from_sequence_length(seq_len: int) -> float:
@@ -46,22 +46,22 @@ class HybridRecommender:
         seen = {int(mid) for mid in click_sequence}
 
         try:
-            neumf_raw = self.neumf.score_all(user_id)
-        except NeuMFInferenceError as exc:
+            history_raw = self.history_recommender.score_all(user_id)
+        except (NeuMFInferenceError, RuntimeError) as exc:
             raise HybridInferenceError(str(exc))
 
-        bert_raw: Dict[int, float] = {}
+        session_raw: Dict[int, float] = {}
         if click_sequence:
             try:
-                bert_raw = self.bert.score_all(click_sequence)
-            except BERT4RecInferenceError:
-                bert_raw = {}
+                session_raw = self.session_recommender.score_all(click_sequence)
+            except (BERT4RecInferenceError, RuntimeError):
+                session_raw = {}
 
         alpha = self._alpha_from_sequence_length(len(click_sequence))
-        bert_norm = self._normalize(bert_raw)
-        neumf_norm = self._normalize(neumf_raw)
+        session_norm = self._normalize(session_raw)
+        history_norm = self._normalize(history_raw)
 
-        candidates = set(bert_norm.keys()) | set(neumf_norm.keys())
+        candidates = set(session_norm.keys()) | set(history_norm.keys())
         if not candidates:
             return []
 
@@ -69,9 +69,9 @@ class HybridRecommender:
         for movie_id in candidates:
             if movie_id in seen:
                 continue
-            b = bert_norm.get(movie_id, 0.0)
-            n = neumf_norm.get(movie_id, 0.0)
-            final_scores[movie_id] = alpha * b + (1.0 - alpha) * n
+            session_score = session_norm.get(movie_id, 0.0)
+            history_score = history_norm.get(movie_id, 0.0)
+            final_scores[movie_id] = alpha * session_score + (1.0 - alpha) * history_score
 
         ranked = sorted(final_scores.items(), key=lambda x: x[1], reverse=True)
         return [movie_id for movie_id, _ in ranked[:top_k]]

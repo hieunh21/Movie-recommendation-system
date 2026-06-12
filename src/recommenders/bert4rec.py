@@ -65,6 +65,61 @@ class BERT4RecModel(nn.Module):
         return logits
 
 
+class ImprovedBERT4RecModel(nn.Module):
+    def __init__(
+        self,
+        vocab_size: int,
+        hidden_size: int,
+        num_layers: int,
+        num_heads: int,
+        dropout: float,
+        max_len: int,
+        pad_token_id: int,
+    ) -> None:
+        super().__init__()
+        self.pad_token_id = pad_token_id
+        self.max_len = max_len
+
+        self.item_emb = nn.Embedding(vocab_size, hidden_size, padding_idx=pad_token_id)
+        self.pos_emb = nn.Embedding(max_len, hidden_size)
+        self.emb_ln = nn.LayerNorm(hidden_size)
+        self.emb_dropout = nn.Dropout(dropout)
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=hidden_size,
+            nhead=num_heads,
+            dim_feedforward=hidden_size * 4,
+            dropout=dropout,
+            batch_first=True,
+            activation="gelu",
+            norm_first=False,
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.head_proj = nn.Linear(hidden_size, hidden_size)
+        self.head_ln = nn.LayerNorm(hidden_size)
+        self.register_parameter("out_bias", nn.Parameter(torch.zeros(vocab_size)))
+
+    def _build_position_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
+        non_pad = (input_ids != self.pad_token_id).long()
+        pos_ids = torch.cumsum(non_pad, dim=1) - 1
+        return pos_ids.clamp(min=0)
+
+    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+        _, seq_len = input_ids.size()
+        if seq_len > self.max_len:
+            raise BERT4RecInferenceError("Input sequence is longer than model max_len.")
+
+        pos_ids = self._build_position_ids(input_ids)
+        hidden = self.item_emb(input_ids) + self.pos_emb(pos_ids)
+        hidden = self.emb_dropout(self.emb_ln(hidden))
+
+        key_padding_mask = input_ids.eq(self.pad_token_id)
+        hidden = self.encoder(hidden, src_key_padding_mask=key_padding_mask)
+        hidden = self.head_ln(torch.nn.functional.gelu(self.head_proj(hidden)))
+        logits = torch.matmul(hidden, self.item_emb.weight.transpose(0, 1)) + self.out_bias
+        return logits
+
+
 @dataclass(frozen=True)
 class BERT4RecArtifacts:
     item2idx: Dict[int, int]
@@ -88,7 +143,11 @@ class BERT4RecRecommender:
         if vocab_size <= 0:
             raise BERT4RecInferenceError("Invalid vocab_size in checkpoint.")
 
-        model = BERT4RecModel(
+        state_dict = checkpoint["model_state_dict"]
+        improved = "item_emb.weight" in state_dict
+        model_cls = ImprovedBERT4RecModel if improved else BERT4RecModel
+
+        model = model_cls(
             vocab_size=vocab_size,
             hidden_size=int(config.get("hidden_size", 256)),
             num_layers=int(config.get("num_layers", 2)),
@@ -97,7 +156,7 @@ class BERT4RecRecommender:
             max_len=int(config.get("max_len", 200)),
             pad_token_id=int(config.get("pad_token_id", 0)),
         )
-        model.load_state_dict(checkpoint["model_state_dict"], strict=True)
+        model.load_state_dict(state_dict, strict=True)
         model.eval()
 
         self.model = model.to(self.device)

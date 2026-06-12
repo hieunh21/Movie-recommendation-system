@@ -304,6 +304,50 @@ body {
   margin-bottom: 24px;
 }
 
+/* ── Model picker ─────────────────────────────────────────────────────────── */
+.model-picker {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+.model-picker-label {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+
+.model-options {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.model-option {
+  min-height: 34px;
+  padding: 7px 13px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.model-option:hover {
+  border-color: rgba(124, 58, 237, 0.45);
+  color: var(--text);
+}
+
+.model-option-active {
+  border-color: rgba(245, 158, 11, 0.65);
+  background: rgba(245, 158, 11, 0.12);
+  color: #fbbf24;
+}
+
 /* ── Sections ─────────────────────────────────────────────────────────────── */
 .content-section {
   margin-bottom: 40px;

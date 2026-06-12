@@ -19,6 +19,8 @@ load_dotenv(Path(__file__).parent / ".env")
 
 from src.recommenders.bert4rec import BERT4RecInferenceError, BERT4RecRecommender
 from src.recommenders.hybrid import HybridInferenceError, HybridRecommender
+from src.recommenders.lightgcn import LightGCNInferenceError, LightGCNRecommender
+from src.recommenders.lrurec import LRURecInferenceError, LRURecRecommender
 from src.recommenders.neumf import NeuMFInferenceError, NeuMFRecommender
 from src.services.content_similarity import ContentSimilarityError, ContentSimilarityService
 from src.services.id_mapper import MovieIdMapper
@@ -29,10 +31,21 @@ from src.services.tmdb import TMDBClient
 # Config
 # ---------------------------------------------------------------------------
 MODEL_DIR = Path("model")
+NEW_MODEL_DIR = Path("new_model")
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "")
 TOP_K = int(os.getenv("TOP_K", "10"))
 MIN_CLICKS = int(os.getenv("MIN_CLICKS_FOR_COLD_START", "3"))
 TMDB_TIMEOUT = int(os.getenv("TMDB_TIMEOUT_SECONDS", "10"))
+
+SESSION_MODELS = {
+    "bert4rec": "BERT4Rec",
+    "bert4rec_improved": "BERT4Rec Improved",
+    "lrurec": "LRURec",
+}
+HISTORY_MODELS = {
+    "neumf": "NeuMF",
+    "lightgcn": "LightGCN",
+}
 
 # ---------------------------------------------------------------------------
 # App
@@ -48,12 +61,19 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Singletons (loaded once on first call)
 # ---------------------------------------------------------------------------
-def _find(candidates: list[str]) -> str:
+def _find(candidates: list[str], base_dir: Path = MODEL_DIR) -> str:
     for name in candidates:
-        p = MODEL_DIR / name
+        p = base_dir / name
         if p.exists():
             return str(p)
-    raise FileNotFoundError(f"Missing model file. Checked: {candidates}")
+    raise FileNotFoundError(f"Missing model file. Checked in {base_dir}: {candidates}")
+
+
+def _validate_option(value: str, allowed: dict[str, str], default: str) -> str:
+    value = (value or default).strip()
+    if value not in allowed:
+        raise HTTPException(status_code=400, detail=f"Unknown model option: {value}")
+    return value
 
 
 @lru_cache(maxsize=1)
@@ -81,6 +101,24 @@ def _bert4rec() -> BERT4RecRecommender:
 
 
 @lru_cache(maxsize=1)
+def _bert4rec_improved() -> BERT4RecRecommender:
+    return BERT4RecRecommender(
+        checkpoint_path=_find(["best_bert4rec_ml1m_improved.pt"], NEW_MODEL_DIR),
+        mapping_path=_find(["item_mapping_bert4rec_ml1m_improved.json"], NEW_MODEL_DIR),
+        device="cpu",
+    )
+
+
+@lru_cache(maxsize=1)
+def _lrurec() -> LRURecRecommender:
+    return LRURecRecommender(
+        checkpoint_path=_find(["best_lrurec_ml1m.pt"], NEW_MODEL_DIR),
+        mapping_path=_find(["item_mapping_lrurec_ml1m.json"], NEW_MODEL_DIR),
+        device="cpu",
+    )
+
+
+@lru_cache(maxsize=1)
 def _neumf() -> NeuMFRecommender:
     return NeuMFRecommender(
         model_path=_find(["NeuMF.keras"]),
@@ -92,8 +130,47 @@ def _neumf() -> NeuMFRecommender:
 
 
 @lru_cache(maxsize=1)
+def _lightgcn() -> LightGCNRecommender:
+    return LightGCNRecommender(
+        model_path=_find(["LightGCN.h5"], NEW_MODEL_DIR),
+        user_mapping_path=_find(["user_mapping_neumf.json"]),
+        item_mapping_path=_find(["item_mapping_lrurec_ml1m.json"], NEW_MODEL_DIR),
+        candidates_path=_find(["neumf_candidates.csv"]),
+        popular_movies_path=_find(["popular_movies.csv"]),
+    )
+
+
+@lru_cache(maxsize=1)
 def _hybrid() -> HybridRecommender:
-    return HybridRecommender(bert=_bert4rec(), neumf=_neumf())
+    return HybridRecommender(session_recommender=_bert4rec(), history_recommender=_neumf())
+
+
+@lru_cache(maxsize=None)
+def _hybrid_for(session_model: str, history_model: str) -> HybridRecommender:
+    return HybridRecommender(
+        session_recommender=_session_recommender(session_model),
+        history_recommender=_history_recommender(history_model),
+    )
+
+
+def _session_recommender(model_name: str):
+    model_name = _validate_option(model_name, SESSION_MODELS, "bert4rec")
+    if model_name == "bert4rec":
+        return _bert4rec()
+    if model_name == "bert4rec_improved":
+        return _bert4rec_improved()
+    if model_name == "lrurec":
+        return _lrurec()
+    raise HTTPException(status_code=400, detail=f"Unknown session model: {model_name}")
+
+
+def _history_recommender(model_name: str):
+    model_name = _validate_option(model_name, HISTORY_MODELS, "neumf")
+    if model_name == "neumf":
+        return _neumf()
+    if model_name == "lightgcn":
+        return _lightgcn()
+    raise HTTPException(status_code=400, detail=f"Unknown history model: {model_name}")
 
 
 @lru_cache(maxsize=1)
@@ -167,11 +244,14 @@ def _to_summaries(movie_ids: list[int]) -> list[dict]:
 # ---------------------------------------------------------------------------
 class NewUserRequest(BaseModel):
     movie_ids: List[int]
+    model: str = "bert4rec"
 
 
 class ExistingUserRequest(BaseModel):
     user_id: int
     click_sequence: List[int] = []
+    session_model: str = "bert4rec"
+    history_model: str = "neumf"
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +260,15 @@ class ExistingUserRequest(BaseModel):
 @app.get("/config")
 def get_config():
     return {"top_k": TOP_K, "min_clicks_for_cold_start": MIN_CLICKS}
+
+
+@app.get("/recommend/options")
+def recommend_options():
+    return {
+        "session_models": [{"value": value, "label": label} for value, label in SESSION_MODELS.items()],
+        "history_models": [{"value": value, "label": label} for value, label in HISTORY_MODELS.items()],
+        "defaults": {"session_model": "bert4rec", "history_model": "neumf"},
+    }
 
 
 @app.get("/movies/search")
@@ -203,7 +292,9 @@ def trending_movies(limit: int = Query(default=12)):
 @app.get("/movies/{movie_id}")
 def get_movie(movie_id: int):
     summaries = _to_summaries([movie_id])
-    return summaries[0] if summaries else HTTPException(status_code=404, detail="Not found")
+    if not summaries:
+        raise HTTPException(status_code=404, detail="Not found")
+    return summaries[0]
 
 
 @app.get("/movies/{movie_id}/similar")
@@ -225,20 +316,26 @@ def recommend_new_user(req: NewUserRequest):
     if len(req.movie_ids) < MIN_CLICKS:
         return []
     try:
-        ids = _bert4rec().recommend(req.movie_ids, top_k=TOP_K)
+        model_name = _validate_option(req.model, SESSION_MODELS, "bert4rec")
+        ids = _session_recommender(model_name).recommend(req.movie_ids, top_k=TOP_K)
         return _to_summaries(ids)
-    except BERT4RecInferenceError as exc:
+    except (BERT4RecInferenceError, LRURecInferenceError, FileNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.post("/recommend/existing-user")
 def recommend_existing_user(req: ExistingUserRequest):
     try:
-        ids = _hybrid().recommend(req.user_id, req.click_sequence, top_k=TOP_K)
+        session_model = _validate_option(req.session_model, SESSION_MODELS, "bert4rec")
+        history_model = _validate_option(req.history_model, HISTORY_MODELS, "neumf")
+        if req.click_sequence:
+            ids = _hybrid_for(session_model, history_model).recommend(req.user_id, req.click_sequence, top_k=TOP_K)
+        else:
+            ids = _history_recommender(history_model).recommend(req.user_id, top_k=TOP_K)
         if not ids:
             ids = _neumf().artifacts.popular_movies[:TOP_K]
         return _to_summaries(ids)
-    except (HybridInferenceError, NeuMFInferenceError) as exc:
+    except (HybridInferenceError, NeuMFInferenceError, LightGCNInferenceError, LRURecInferenceError, FileNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
 

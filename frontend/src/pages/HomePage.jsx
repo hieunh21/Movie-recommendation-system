@@ -3,6 +3,17 @@ import { useApp } from "../context/AppContext";
 import Carousel from "../components/Carousel";
 import { api } from "../api/client";
 
+const SESSION_MODELS = [
+  { value: "bert4rec", label: "BERT4Rec" },
+  { value: "bert4rec_improved", label: "BERT4Rec+" },
+  { value: "lrurec", label: "LRURec" },
+];
+
+const HISTORY_MODELS = [
+  { value: "neumf", label: "NeuMF" },
+  { value: "lightgcn", label: "LightGCN" },
+];
+
 // ─── New User ────────────────────────────────────────────────────────────────
 function NewUserView() {
   const { newUser, setNewUser } = useApp();
@@ -31,7 +42,7 @@ function NewUserView() {
     }
     setRecLoading(true);
     api
-      .recommendNewUser(newUser.viewedIds)
+      .recommendNewUser(newUser.viewedIds, newUser.model)
       .then((recs) => setNewUser((p) => ({ ...p, recommendations: recs })))
       .catch(console.error)
       .finally(() => setRecLoading(false));
@@ -64,6 +75,20 @@ function NewUserView() {
 
   return (
     <>
+      <ModelPicker
+        label="Session model"
+        value={newUser.model}
+        options={SESSION_MODELS}
+        onChange={(model) =>
+          setNewUser({
+            viewedIds: [],
+            searchResults: [],
+            recommendations: [],
+            model,
+          })
+        }
+      />
+
       {/* Search */}
       <form className="search-bar" onSubmit={handleSearch}>
         <input
@@ -96,7 +121,7 @@ function NewUserView() {
       )}
 
       {(newUser.recommendations.length > 0 || recLoading) && (
-        <Section title="✨ For You — BERT4Rec">
+        <Section title={`✨ For You — ${labelFor(SESSION_MODELS, newUser.model)}`}>
           {recLoading
             ? <Spinner />
             : <Carousel movies={newUser.recommendations} onView={handleView} />}
@@ -117,10 +142,10 @@ function ExistingUserView() {
     api.sampleUsers(20).then(setUserList).catch(console.error);
   }, []);
 
-  const fetchRecs = useCallback(async (userId, clickSeq) => {
+  const fetchRecs = useCallback(async (userId, clickSeq, sessionModel, historyModel) => {
     setLoading(true);
     try {
-      const recs = await api.recommendExistingUser(parseInt(userId), clickSeq);
+      const recs = await api.recommendExistingUser(parseInt(userId), clickSeq, sessionModel, historyModel);
       setExistingUser((p) => ({ ...p, recommendations: recs }));
     } catch (err) {
       console.error(err);
@@ -134,7 +159,7 @@ function ExistingUserView() {
     // Reset clickSequence khi đổi sang user khác
     setInputId(uidStr);
     setExistingUser((p) => ({ ...p, userId: uidStr, clickSequence: [] }));
-    fetchRecs(uid, []);
+    fetchRecs(uid, [], existingUser.sessionModel, existingUser.historyModel);
   };
 
   const handleSubmit = (e) => {
@@ -148,7 +173,7 @@ function ExistingUserView() {
     setExistingUser((prev) => {
       if (prev.clickSequence.includes(movie.movie_id)) return prev;
       const newSeq = [...prev.clickSequence, movie.movie_id];
-      if (prev.userId) fetchRecs(prev.userId, newSeq);
+      if (prev.userId) fetchRecs(prev.userId, newSeq, prev.sessionModel, prev.historyModel);
       return { ...prev, clickSequence: newSeq };
     });
   }, [fetchRecs]); // eslint-disable-line
@@ -158,6 +183,34 @@ function ExistingUserView() {
 
   return (
     <>
+      <ModelPicker
+        label="History model"
+        value={existingUser.historyModel}
+        options={HISTORY_MODELS}
+        onChange={(historyModel) =>
+          setExistingUser((p) => ({
+            ...p,
+            clickSequence: [],
+            recommendations: [],
+            historyModel,
+          }))
+        }
+      />
+
+      <ModelPicker
+        label="Session model"
+        value={existingUser.sessionModel}
+        options={SESSION_MODELS}
+        onChange={(sessionModel) =>
+          setExistingUser((p) => ({
+            ...p,
+            clickSequence: [],
+            recommendations: [],
+            sessionModel,
+          }))
+        }
+      />
+
       {/* User ID input */}
       <form className="search-bar" onSubmit={handleSubmit}>
         <input
@@ -188,13 +241,16 @@ function ExistingUserView() {
       {existingUser.userId && (
         <div className="hint-bar">
           User #{existingUser.userId} · Session clicks: {seq} · Hybrid α = {alpha.toFixed(1)}
+          {" · "}
+          {labelFor(HISTORY_MODELS, existingUser.historyModel)}
+          {seq > 0 ? ` + ${labelFor(SESSION_MODELS, existingUser.sessionModel)}` : ""}
         </div>
       )}
 
       {loading && <Spinner />}
 
       {!loading && existingUser.recommendations.length > 0 && (
-        <Section title="✨ For You — Hybrid (NeuMF + BERT4Rec)">
+        <Section title={`✨ For You — ${seq > 0 ? "Hybrid" : labelFor(HISTORY_MODELS, existingUser.historyModel)}`}>
           <Carousel movies={existingUser.recommendations} onView={handleView} />
         </Section>
       )}
@@ -210,6 +266,30 @@ function Section({ title, children }) {
       {children}
     </section>
   );
+}
+
+function ModelPicker({ label, value, options, onChange }) {
+  return (
+    <div className="model-picker">
+      <span className="model-picker-label">{label}</span>
+      <div className="model-options">
+        {options.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            className={`model-option ${value === option.value ? "model-option-active" : ""}`}
+            onClick={() => onChange(option.value)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function labelFor(options, value) {
+  return options.find((option) => option.value === value)?.label || value;
 }
 
 
